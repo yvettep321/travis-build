@@ -30,6 +30,7 @@ travis_install_jdk_ext_provider() {
       travis_terminate 2
     }
   fi
+  
   chmod +x ~/bin/install-jdk.sh
   travis_cmd "export JAVA_HOME=~/$jdk" --echo
   # shellcheck disable=SC2016
