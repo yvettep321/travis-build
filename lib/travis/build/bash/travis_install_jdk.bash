@@ -30,7 +30,7 @@ travis_install_jdk_ext_provider() {
       travis_terminate 2
     }
   fi
-  
+
   chmod +x ~/bin/install-jdk.sh
   travis_cmd "export JAVA_HOME=~/$jdk" --echo
   # shellcheck disable=SC2016
@@ -48,7 +48,7 @@ travis_install_jdk_package() {
   PACKAGE="temurin-${JAVA_VERSION}-jdk"
   if ! dpkg -s "$PACKAGE" >/dev/null 2>&1; then
     if dpkg-query -l temurin* >/dev/null 2>&1; then
-      dpkg-query -l temurin* | grep temurin | awk '{print $2}' | xargs sudo dpkg -P
+       dpkg-query -l temurin* | grep temurin | awk '{print $2}' | xargs sudo dpkg -P
     fi
     wget -O - https://packages.adoptium.net/artifactory/api/gpg/key/public | sudo tee /usr/share/keyrings/adoptium.asc
     echo "deb [signed-by=/usr/share/keyrings/adoptium.asc] https://packages.adoptium.net/artifactory/deb $(awk -F= '/^VERSION_CODENAME/{print$2}' /etc/os-release) main" | sudo tee /etc/apt/sources.list.d/adoptium.list
