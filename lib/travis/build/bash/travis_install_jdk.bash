@@ -28,6 +28,8 @@ travis_install_jdk_package_adopt() {
     sudo add-apt-repository --yes https://adoptopenjdk.jfrog.io/adoptopenjdk/deb/
     sudo apt-get update -yqq
     sudo apt-get -yqq --no-install-suggests --no-install-recommends install "$PACKAGE" || true
+    travis_cmd "export JAVA_HOME=/usr/lib/jvm/adoptopenjdk-${JAVA_VERSION}-hotspot" --echo
+    travis_cmd 'export PATH="$JAVA_HOME/bin:$PATH"' --echo
     sudo update-java-alternatives -s "$PACKAGE"*
   fi
 }
