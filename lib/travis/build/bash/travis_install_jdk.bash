@@ -14,7 +14,7 @@ travis_install_jdk() {
   esac
 }
 
-travis_install_jdk_package_adopt() {
+travis_install_jdk_package_adopt() { #packages from adoptopenjdk repo
 
   local JAVA_VERSION
   JAVA_VERSION="$1"
@@ -30,7 +30,7 @@ travis_install_jdk_package_adopt() {
   fi
 }
 
-travis_install_jdk_package_amazon() {
+travis_install_jdk_package_amazon() { #packages from amazon repo
 
   local JAVA_VERSION
   JAVA_VERSION="$1"
