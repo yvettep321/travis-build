@@ -20,10 +20,6 @@ travis_install_jdk_package_adopt() {
   JAVA_VERSION="$1"
   sudo apt-get update -yqq
   PACKAGE="adoptopenjdk-${JAVA_VERSION}-hotspot"
-  if ! dpkg -s "$PACKAGE" >/dev/null 2>&1; then
-    if dpkg-query -l adoptopenjdk* >/dev/null 2>&1; then
-      dpkg-query -l adoptopenjdk* | grep adoptopenjdk | awk '{print $2}' | xargs sudo dpkg -P
-    fi
     wget -qO - https://adoptopenjdk.jfrog.io/adoptopenjdk/api/gpg/key/public | sudo apt-key add -
     sudo add-apt-repository --yes https://adoptopenjdk.jfrog.io/adoptopenjdk/deb/
     sudo apt-get update -yqq
