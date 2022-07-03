@@ -1,13 +1,13 @@
 require 'spec_helper'
 
-describe Travis::Build::Git::Clone, :sexp do
+describe Travis::Vcs::Git::Clone, :sexp do
   let(:payload)  { payload_for(:push, :ruby) }
   let(:script)   { Travis::Build::Script.new(payload) }
   subject(:sexp) { script.sexp }
 
   let(:url)    { "https://github.com/#{payload[:repository][:slug]}.git" }
   let(:dir)    { payload[:repository][:slug] }
-  let(:depth)  { Travis::Build::Git::DEFAULTS[:git][:depth] }
+  let(:depth)  { Travis::Vcs::Git::DEFAULTS[:git][:depth] }
   let(:branch) { payload[:job][:branch] || 'master' }
 
   let(:oauth_token) { 'abcdef01234' }
@@ -86,6 +86,7 @@ describe Travis::Build::Git::Clone, :sexp do
   let(:checkout_push) { [:cmd, "git checkout -qf #{payload[:job][:commit]}", assert: true, echo: true] }
   let(:checkout_tag)  { [:cmd, 'git checkout -qf v1.0.0', assert: true, echo: true] }
   let(:checkout_pull) { [:cmd, 'git checkout -qf FETCH_HEAD', assert: true, echo: true] }
+  let(:checkout_pull_fetch_head_alternative) { [:cmd, "git merge #{ payload[:job][:pull_request_head_branch]} -m 'Travis CI build'", assert: true, echo: true] }
 
   it { should include_sexp cd }
 
@@ -124,11 +125,70 @@ describe Travis::Build::Git::Clone, :sexp do
     it { should include_sexp checkout_pull }
   end
 
+  describe 'checks out the given commit for a pull request' do
+    before { payload[:job][:pull_request] = true }
+    before { payload[:job][:pull_request_head_branch] = "#{payload[:job][:branch]}_new" }
+    before { payload[:repository][:vcs_type] = 'BitbucketRepository' }
+    it { should include_sexp checkout_pull_fetch_head_alternative }
+  end
+
   context "When sparse_checkout is requested" do
     before { payload[:config][:git]['sparse_checkout'] = 'sparse_checkout_file' }
     it { should include_sexp [:cmd, "git -C #{payload[:repository][:slug]} pull origin master --depth=50", echo: true, timing: true, retry: true]}
     it { should include_sexp [:cmd, "echo sparse_checkout_file >> #{payload[:repository][:slug]}/.git/info/sparse-checkout", assert: true, echo: true, timing: true, retry: true]}
     it { should include_sexp [:cmd, "cat #{payload[:repository][:slug]}/sparse_checkout_file >> #{payload[:repository][:slug]}/.git/info/sparse-checkout", assert: true, echo: true, timing: true, retry: true]}
     it { store_example(name: 'git sparse checkout') }
+  end
+
+  describe 'autocrlf option' do
+    context 'when autocrlf is not given' do
+      it "preserves the default" do
+        should_not include_sexp [:cmd, /git config --global core\.autocrlf/]
+      end
+    end
+
+    context 'when autocrlf is set to "true"' do
+      before { payload[:config][:git]['autocrlf'] = 'true' }
+
+      it { should include_sexp [:cmd, "git config --global core.autocrlf true", assert: true, echo: true, timing: true] }
+      it { store_example(name: 'git autocrlf true') }
+    end
+
+    context 'when autocrlf is set to "false"' do
+      before { payload[:config][:git]['autocrlf'] = false }
+
+      it { should include_sexp [:cmd, "git config --global core.autocrlf false", assert: true, echo: true, timing: true] }
+      it { store_example(name: 'git autocrlf false') }
+    end
+
+    context 'when autocrlf is set to "input"' do
+      before { payload[:config][:git]['autocrlf'] = 'input' }
+
+      it { should include_sexp [:cmd, "git config --global core.autocrlf input", assert: true, echo: true, timing: true] }
+      it { store_example(name: 'git autocrlf input') }
+    end
+
+    context 'when autocrlf is set to "invlaid"' do
+      before { payload[:config][:git]['autocrlf'] = 'invlaid' }
+
+      it { should include_sexp [:cmd, "git config --global core.autocrlf invlaid", assert: true, echo: true, timing: true] }
+      it { store_example(name: 'git autocrlf invlaid') }
+    end
+  end
+
+  describe 'git.symlinks option' do
+    context 'when it does not exist' do
+      it { should_not include_sexp [:cmd, /^git config --global core\.symlinks/]}
+    end
+
+    context 'when it is set to true' do
+      before { payload[:config][:git]['symlinks'] = true }
+      it { should include_sexp [:cmd, /^git config --global core\.symlinks true/]}
+    end
+
+    context 'when it is set to false' do
+      before { payload[:config][:git]['symlinks'] = false }
+      it { should include_sexp [:cmd, /^git config --global core\.symlinks false/]}
+    end
   end
 end

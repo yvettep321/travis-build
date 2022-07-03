@@ -10,15 +10,16 @@ require 'faraday_middleware'
 require 'minitar'
 require 'rake'
 require 'rubygems'
+require 'octokit'
 
 module Travis
   module Build
     module RakeTasks
       SHELLCHECK_VERSION = 'v0.5.0'
       SHELLCHECK_URL = File.join(
-        'https://www.googleapis.com',
-        '/download/storage/v1/b/shellcheck/o',
-        "shellcheck-#{SHELLCHECK_VERSION}.linux.x86_64.tar.xz?alt=media"
+        'https://github.com',
+        '/koalaman/shellcheck/releases/download',
+        "/#{SHELLCHECK_VERSION}/shellcheck-#{SHELLCHECK_VERSION}.linux.x86_64.tar.xz?alt=media"
       )
       SHFMT_VERSION = 'v2.5.1'
       SHFMT_URL = File.join(
@@ -26,6 +27,8 @@ module Travis
         "mvdan/sh/releases/download/#{SHFMT_VERSION}",
         "shfmt_#{SHFMT_VERSION}_%<uname>s_%<arch>s"
       )
+
+      GHC_UPDATE_PR_TITLE = 'Update ghc versions'
 
       def fetch_githubusercontent_file(from, host: 'raw.githubusercontent.com',
                                        to: nil, mode: 0o755)
@@ -138,11 +141,16 @@ module Travis
 
         expanded = {
           full_version => full_version,
-          major => full_version,
-          "#{major}.x" => full_version,
-          "#{major}.x.x" => full_version,
-          "#{fullparts[0]}.#{fullparts[1]}.x" => full_version
         }
+
+        unless full_version =~ /(alpha|beta)/i
+          expanded.merge!({
+            major => full_version,
+            "#{major}.x" => full_version,
+            "#{major}.x.x" => full_version,
+            "#{fullparts[0]}.#{fullparts[1]}.x" => full_version
+          })
+        end
 
         key = "#{fullparts[0]}.#{fullparts[1]}"
         expanded[key] = full_version if alias_major_minor
@@ -207,6 +215,7 @@ module Travis
         ENV['PATH'] = tmpbin_path
         vers = `shellcheck --version 2>/dev/null`.strip
         return false if vers.nil? || vers.strip.empty?
+
         vers.split(/\n/)
             .find { |s| s.start_with?('version:') }
             .split.last == SHELLCHECK_VERSION.sub(/^v/, '')
@@ -224,7 +233,7 @@ module Travis
       end
 
       def file_update_casher
-        fetch_githubusercontent_file 'travis-ci/casher/production/bin/casher'
+        fetch_githubusercontent_file 'travis-ci/casher/bash/bin/casher'
       end
 
       def file_update_gimme
@@ -271,16 +280,17 @@ module Travis
         fetch_githubusercontent_file 'sormuras/bach/master/install-jdk.sh'
       end
 
-      def file_update_tmate
+      def file_update_tmate(arch)
         latest_release = latest_release_for('tmate-io/tmate')
         logger.info "Latest tmate release is #{latest_release}"
+
         fetch_githubusercontent_file(
           File.join(
             'tmate-io/tmate/releases/download',
             latest_release,
-            "tmate-#{latest_release}-static-linux-amd64.tar.gz"
+            "tmate-#{latest_release}-static-linux-#{arch}.tar.xz"
           ),
-          host: 'github.com', to: 'tmate-static-linux-amd64.tar.gz'
+          host: 'github.com', to: "tmate-static-linux-#{arch}.tar.xz"
         )
       end
 
@@ -320,11 +330,62 @@ module Travis
         dest.chmod(0o644)
       end
 
+      def file_update_sonar_scanner(version: ENV['TRAVIS_BUILD_SONAR_CLOUD_CLI_VERSION'] || '4.7.0.2747')
+        conn = build_faraday_conn(host: 'repo1.maven.org')
+        response = conn.get("/maven2/org/sonarsource/scanner/cli/sonar-scanner-cli/#{version}/sonar-scanner-cli-#{version}.zip")
+        raise 'Could not fetch SonarCloud scanner CLI archive' unless response.success?
+
+        dest = top + "public/files/sonar-scanner.zip"
+        dest.dirname.mkpath
+        dest.write(response.body)
+        dest.chmod(0o644)
+      end
+
       def tmpbin_path
         @tmpbin_path ||= %W[
           #{tmpbin}
           #{ENV['PATH']}
         ].join(':')
+      end
+
+      def octokit
+        @octokit ||= Octokit::Client.new(access_token: ENV['GITHUB_OAUTH_TOKEN'])
+      end
+
+      def ghc_update_pr_exists?
+        !octokit.pull_requests("travis-ci/travis-build").select {|pr| pr.title =~ %r[#{GHC_UPDATE_PR_TITLE}]}.empty?
+      end
+
+      def configure_git
+        sh "git config --local user.name \"Travis CI\""
+        sh "git config --local user.email \"support@travis-ci.com\""
+        sh "git config credential.helper \"store --file=.git/credentials\""
+        sh "echo \"https://${GITHUB_OAUTH_TOKEN}:@github.com\" > .git/credentials 2>/dev/null"
+      end
+
+      def create_ghc_update_git_commit
+        sh "git branch -D ghc-json-update" do |ok, res|
+          # ignore command failure
+        end
+        sh "git checkout -b ghc-json-update"
+        sh "git add public/version-aliases/ghc.json"
+        sh "git commit -m \"Update ghc.json\""
+        sh "git checkout -"
+      end
+
+      def push_ghc_update_branch
+        sh "git push origin ghc-json-update"
+      end
+
+      def create_ghc_pr
+        push_ghc_update_branch
+        octokit.create_pull_request(
+          "travis-ci/travis-build",
+          "master",
+          "ghc-json-update",
+          "Update ghc.json",
+          "#{Time.now.utc} Update ghc.json"
+        )
       end
 
       extend Rake::DSL
@@ -367,9 +428,14 @@ module Travis
       desc 'update install-jdk.sh'
       file('public/files/install-jdk.sh') { file_update_install_jdk_sh }
 
-      desc 'update tmate'
-      file 'public/files/tmate-static-linux-amd64.tar.gz' do
-        file_update_tmate
+      desc 'update tmate for amd64'
+      file 'public/files/tmate-static-linux-amd64.tar.xz' do
+        file_update_tmate 'amd64'
+      end
+
+      desc 'update tmate for arm64v8'
+      file 'public/files/tmate-static-linux-arm64v8.tar.xz' do
+        file_update_tmate 'arm64v8'
       end
 
       desc 'update rustup'
@@ -381,6 +447,38 @@ module Travis
       desc 'update ghc versions'
       file 'public/version-aliases/ghc.json' => 'tmp/ghc-versions.html' do
         file_update_ghc_versions
+      end
+
+      desc 'remove tmp/ghc-versions.html'
+      task :rm_ghc_versions do
+        FileUtils.rm_f 'tmp/ghc-versions.html'
+      end
+
+      desc 'refresh ghc.json'
+      task :ghc_json => [
+        :rm_ghc_versions,
+        'public/version-aliases/ghc.json'
+      ]
+
+      desc "create PR for updating ghc.json"
+      task :create_ghc_json_pr => :ghc_json do
+        next if ghc_update_pr_exists?
+
+        sh "git diff --exit-code public/version-aliases/ghc.json" do |ok, res|
+          if ok
+            logger.info "ghc.json is up to date"
+            next
+          end
+        end
+
+        if ghc_update_pr_exists?
+          logger.info "ghc.json update PR already exists"
+          next
+        end
+
+        configure_git
+        create_ghc_update_git_commit
+        create_ghc_pr
       end
 
       desc 'update sauce connect data'
@@ -414,6 +512,11 @@ module Travis
         'public/version-aliases/ghc.json'
       ]
 
+      desc 'update sonar-scanner.zip'
+      file 'public/files/sonar-scanner.zip' do
+        file_update_sonar_scanner
+      end
+
       desc 'update static files'
       multitask update_static_files: Rake::FileList[
         'tmp/sc_data.json',
@@ -428,7 +531,9 @@ module Travis
         'public/files/sbt',
         'public/files/sc-linux.tar.gz',
         'public/files/sc-osx.zip',
-        'public/files/tmate-static-linux-amd64.tar.gz',
+        'public/files/sonar-scanner.zip',
+        'public/files/tmate-static-linux-amd64.tar.xz',
+        'public/files/tmate-static-linux-arm64v8.tar.xz',
         'public/version-aliases/ghc.json',
       ]
 
@@ -500,9 +605,11 @@ module Travis
       task :dump_examples_logs do
         (top + 'tmp/examples-build-logs').glob('*.log') do |log_file|
           logger.info "dumping #{log_file}"
+          logger.info "---"
           $stdout.write(
             log_file.read.sub(/.+Network availability confirmed\./m, '')
           )
+          logger.info "---"
         end
       end
 

@@ -15,10 +15,19 @@ module Travis
         )
 
         RVM_VERSION_ALIASES = {
-          '2.3' => '2.3.7',
-          '2.4' => '2.4.4',
-          '2.5' => '2.5.1'
+          '2.3' => '2.3.8',
+          '2.4' => '2.4.10',
+          '2.5' => '2.5.8',
+          '2.6' => '2.6.6',
+          '2.7' => '2.7.1',
         }
+
+        RVM_GPG_KEY_IDS = %w(
+          mpapis
+          pkuczynski
+        )
+
+        BUNDLER2_RUBY = '2.3.0'
 
         def export
           super
@@ -58,6 +67,17 @@ module Travis
             force_187_p371 vers
           end
 
+          def import_gpg_key
+            RVM_GPG_KEY_IDS.each do |id|
+              sh.if "$(command -v gpg2)" do
+                sh.cmd "command curl -sSL https://rvm.io/#{id}.asc | gpg2 --import -", assert: false
+              end
+              sh.else do
+                sh.cmd "command curl -sSL https://rvm.io/#{id}.asc | gpg --import -", assert: false
+              end
+            end
+          end
+
           def setup_rvm
             write_default_gems
             if without_teeny?(version)
@@ -66,6 +86,8 @@ module Travis
             sh.cmd('type rvm &>/dev/null || source ~/.rvm/scripts/rvm', echo: false, assert: false, timing: false)
             sh.file '$rvm_path/user/db', CONFIG.join("\n")
             send rvm_strategy
+
+            install_bundler
           end
 
           def rvm_strategy
@@ -77,8 +99,8 @@ module Travis
 
           def use_ruby_head
             sh.fold('rvm') do
+              import_gpg_key
               sh.echo MSGS[:setup_ruby_head] % ruby_version, ansi: :yellow
-              sh.cmd "rvm get stable", assert: false if ruby_version == 'jruby-head'
               sh.export 'ruby_alias', "`rvm alias show #{ruby_version} 2>/dev/null`"
               sh.cmd "rvm alias delete #{ruby_version}"
               sh.cmd "rvm remove ${ruby_alias:-#{ruby_version}} --gems"
@@ -99,6 +121,9 @@ module Travis
 
           def use_ruby_version_file
             sh.fold('rvm') do
+              sh.if '-n $(grep "^3" .ruby-version)' do
+                sh.cmd 'rvm get head'
+              end
               sh.cmd 'rvm use $(< .ruby-version) --install --binary --fuzzy'
             end
           end
@@ -114,6 +139,7 @@ module Travis
             sh.fold('rvm') do
               # TruffleRuby has frequent (~monthly) releases,
               # use latest RVM to have the latest version available.
+              import_gpg_key
               sh.cmd "rvm get master"
               sh.cmd "rvm install #{ruby_version}"
               sh.cmd "rvm use #{ruby_version}"
@@ -133,6 +159,9 @@ module Travis
                   sh.cmd "rvm use #{ruby_version} --install --binary --fuzzy"
                 end
               else
+                if ruby_version.start_with? '3'
+                  sh.cmd "rvm get head"
+                end
                 sh.cmd "rvm use #{ruby_version} --install --binary --fuzzy"
               end
             end
@@ -167,6 +196,19 @@ module Travis
 
           def without_teeny?(version)
             version =~ /\A(\d+)(\.\d+)\z/
+          end
+
+          def install_bundler
+            sh.if "! $(command -v bundle)" do
+              sh.fold "install_bundler" do
+                sh.if "$(travis_vers2int \"$(ruby -e 'puts RUBY_VERSION')\") -lt $(travis_vers2int #{BUNDLER2_RUBY})" do
+                  sh.cmd "gem install bundler -v '< 2'"
+                end
+                sh.else do
+                  sh.cmd "gem install bundler"
+                end
+              end
+            end
           end
       end
     end

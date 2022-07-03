@@ -36,7 +36,7 @@ module Travis
 
           sh.newline
           sh.echo 'C# support for Travis-CI is community maintained.', ansi: :red
-          sh.echo 'Please open any issues at https://github.com/travis-ci/travis-ci/issues/new and cc @joshua-anderson @akoeplinger @nterry', ansi: :red
+          sh.echo 'Please open any issues at https://travis-ci.community/c/languages/37-category and cc @joshua-anderson @akoeplinger @nterry', ansi: :red
 
           install_mono if is_mono_enabled
           install_dotnet if is_dotnet_enabled
@@ -144,6 +144,9 @@ View valid versions of \"dotnet\" at https://docs.travis-ci.com/user/languages/c
               end
               sh.elif '$(lsb_release -cs) = bionic' do
                 sh.cmd "sudo sh -c \"echo 'deb [arch=amd64] https://packages.microsoft.com/ubuntu/18.04/prod bionic main' > /etc/apt/sources.list.d/dotnet-official.list\"", assert: true
+              end
+              sh.elif '$(lsb_release -cs) = focal' do
+                sh.cmd "sudo sh -c \"echo 'deb [arch=amd64] https://packages.microsoft.com/ubuntu/20.04/prod focal main' > /etc/apt/sources.list.d/dotnet-official.list\"", assert: true
               end
               sh.else do
                 sh.failure "The version of this operating system is not supported by .NET Core. View valid versions at https://docs.travis-ci.com/user/languages/csharp/"

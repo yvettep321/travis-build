@@ -3,11 +3,12 @@ require 'core_ext/hash/deep_symbolize_keys'
 require 'core_ext/object/false'
 require 'erb'
 require 'rbconfig'
+require 'date'
 
 require 'travis/build/addons'
 require 'travis/build/appliances'
 require 'travis/build/errors'
-require 'travis/build/git'
+require 'travis/vcs'
 require 'travis/build/helpers'
 require 'travis/build/stages'
 
@@ -27,6 +28,7 @@ require 'travis/build/script/generic'
 require 'travis/build/script/haskell'
 require 'travis/build/script/haxe'
 require 'travis/build/script/julia'
+require 'travis/build/script/matlab'
 require 'travis/build/script/nix'
 require 'travis/build/script/node_js'
 require 'travis/build/script/elm'
@@ -42,6 +44,7 @@ require 'travis/build/script/rust'
 require 'travis/build/script/scala'
 require 'travis/build/script/smalltalk'
 require 'travis/build/script/shared/directory_cache'
+require 'travis/build/script/shared/workspace'
 
 module Travis
   module Build
@@ -81,8 +84,14 @@ module Travis
       private_constant :TRAVIS_FUNCTIONS
 
       class << self
-        def defaults
-          Git::DEFAULTS.merge(self::DEFAULTS)
+        def defaults(key, server_type)
+          if key && self::DEFAULTS.key?(key.to_sym)
+            Travis::Vcs.defaults(server_type).merge self::DEFAULTS[key.to_sym]
+          elsif self::DEFAULTS[:default]
+            Travis::Vcs.defaults(server_type).merge self::DEFAULTS[:default]
+          else
+            Travis::Vcs.defaults(server_type).merge self::DEFAULTS
+          end
         end
       end
 
@@ -101,7 +110,13 @@ module Travis
 
       def initialize(data)
         @raw_data = data.deep_symbolize_keys
-        @data = Data.new({ config: self.class.defaults }.deep_merge(self.raw_data))
+        raw_config = @raw_data[:config]
+        server_type = @raw_data.dig(:repository, :server_type) || 'git'
+        lang_sym = raw_config.fetch(:language,"").to_sym
+        @data = Data.new({
+          config: self.class.defaults(raw_config[:os], server_type),
+          language_default_p: !raw_config[lang_sym]
+        }.deep_merge(self.raw_data))
         @options = {}
 
         tracing_enabled = data[:trace]
@@ -177,7 +192,30 @@ module Travis
           sh.raw "travis_rel=$(sw_vers -productVersion)"
           sh.raw "travis_rel_version=${travis_rel%*.*}"
         end
-        "archive_url=https://s3.amazonaws.com/#{bucket}/binaries/${travis_host_os}/${travis_rel_version}/$(uname -m)/#{file_name}"
+        sh.elif "$(uname) = 'FreeBSD'" do
+          sh.raw "travis_host_os=freebsd"
+          sh.raw "travis_rel_version=$(uname -r | rev | cut -c9- | rev)"
+        end
+        lang = 'python' if lang.start_with?('py')
+        "archive_url=https://#{lang_archive_prefix(lang, bucket)}/binaries/${travis_host_os}/${travis_rel_version}/$(uname -m)/#{file_name}"
+      end
+
+      def lang_archive_prefix(lang, bucket)
+        custom_archive = ENV["TRAVIS_BUILD_LANG_ARCHIVES_#{lang}".upcase]
+        unless custom_archive.to_s.empty?
+          return custom_archive.output_safe
+        end
+
+        case Travis::Build.config.lang_archive_host
+        when 'gcs'
+          "storage.googleapis.com/travis-ci-language-archives/#{lang}"
+        when 's3'
+          "s3.amazonaws.com/#{bucket}"
+        when 'cdn'
+          "language-archives.travis-ci.com/#{lang}"
+        else
+          "s3.amazonaws.com/#{bucket}" # explicitly state default
+        end
       end
 
       def debug_build_via_api?
@@ -239,17 +277,19 @@ module Travis
           sh.raw bash('travis_preamble')
           sh.raw 'travis_preamble'
 
-          sh.file '${TRAVIS_HOME}/.travis/job_stages',
+          sh.file '${TRAVIS_HOME}/.travis/functions',
                   "# travis_.+ functions:\n" +
                   TRAVIS_FUNCTIONS.map { |f| bash(f) }.join("\n")
 
-          sh.raw 'source ${TRAVIS_HOME}/.travis/job_stages'
+          sh.file '${TRAVIS_HOME}/.travis/job_stages',
+                  %[source "${TRAVIS_HOME}/.travis/functions"\n]
+          sh.raw 'source "${TRAVIS_HOME}/.travis/functions"'
           sh.raw 'travis_setup_env'
           sh.raw 'travis_temporary_hacks'
         end
 
         def internal_ruby_regex_esc
-          @internal_ruby_regex_esc ||= Shellwords.escape(
+          @internal_ruby_regex_esc ||= shesc(
             Travis::Build.config.internal_ruby_regex.output_safe
           )
         end
@@ -259,6 +299,7 @@ module Travis
         end
 
         def configure
+          apply :agent
           apply :check_unsupported
           apply :set_x
           apply :show_system_info
@@ -289,6 +330,7 @@ module Travis
           apply :npm_registry
           apply :uninstall_oclint
           apply :rvm_use
+          apply :rm_etc_boto_cfg
           apply :rm_oraclejdk8_symlink
           apply :enable_i386
           apply :update_rubygems
@@ -299,6 +341,14 @@ module Travis
           apply :deprecate_xcode_64
           apply :update_heroku
           apply :shell_session_update
+          apply :git_v2
+          apply :set_docker_mtu_and_registry_mirrors
+          apply :resolvconf
+          apply :maven_central_mirror
+          apply :maven_https
+          apply :disable_windows_defender
+
+          check_deprecation
         end
 
         def setup_filter
@@ -408,6 +458,66 @@ module Travis
 
         def lang_name
           self.class.name.split('::').last.downcase
+        end
+
+        def shesc(str)
+          Shellwords.escape(str)
+        end
+
+        def check_deprecation
+          return unless self.class.const_defined?("DEPRECATIONS")
+          self.class.const_get("DEPRECATIONS").each do |cfg|
+            if data.language_default_p && DateTime.now < Date.parse(cfg[:cutoff_date])
+              sh.echo "Using the default #{cfg[:name] || self.class.name} version #{cfg[:current_default]}. " \
+                "Starting on #{cfg[:cutoff_date]} the default will change to #{cfg[:new_default]}. " \
+                "If you wish to keep using this version beyond this date, " \
+                "please explicitly set the #{cfg[:name]} value in configuration.",
+                ansi: :yellow
+            end
+          end
+        end
+
+        def use_workspaces
+          return unless data.workspaces && data.workspaces.key?(:use)
+
+          ws_names = Array(data.workspaces[:use])
+
+          sh.fold "workspaces_use" do
+            ws_names.each do |name|
+              sh.echo "Fetching workspace #{shesc(name)}", ansi: :green
+              ws = Travis::Build::Script::Workspace.new(sh, data, name, [], :use)
+              ws.install_casher
+              ws.fetch
+              ws.expand
+              sh.newline
+            end
+          end
+        end
+
+        def create_workspaces
+          return unless data.workspaces && data.workspaces.key?(:create)
+
+          # data.workspaces[:create] is expected to be either:
+          # 1. a hash with keys :name and :paths, or
+          # 2. an array of hashes with these keys
+          ws_config = Array([data.workspaces[:create]]).flatten
+
+          sh.fold "workspaces_create" do
+            sh.echo "Creating workspaces", ansi: :green
+            ws_config.each do |cfg|
+              unless cfg.respond_to?(:key?) && cfg.key?(:name) && cfg.key?(:paths)
+                sh.echo "workspaces.create must be a hash with keys 'name' and 'paths', " \
+                  "or an array of such hashes", ansi: :yellow
+                next
+              end
+              sh.echo "Workspace: #{shesc(cfg[:name])}", ansi: :green
+              ws = Travis::Build::Script::Workspace.new(sh, data, cfg[:name], cfg[:paths], :create)
+              ws.install_casher
+              ws.compress
+              ws.upload
+              sh.newline
+            end
+          end
         end
     end
   end

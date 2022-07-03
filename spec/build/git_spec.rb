@@ -1,6 +1,6 @@
 require 'spec_helper'
 
-describe Travis::Build::Git, :sexp do
+describe Travis::Vcs::Git, :sexp do
   let(:netrc_inst)  { /echo -e "machine #{host}\\n  login travis-ci\\n  password access_token\\n" > \${TRAVIS_HOME}\/\.netrc/ }
   let(:netrc_oauth) { /echo -e "machine #{host}\\n  login oauth_token\\n" > \${TRAVIS_HOME}\/\.netrc/ }
   let(:host)        { 'github.com' }
@@ -40,8 +40,16 @@ describe Travis::Build::Git, :sexp do
     let(:https) { "https://github.com/#{payload[:repository][:slug]}.git" }
     let(:cmd)   { [:cmd, /git clone.* #{send(protocol)}/] }
 
+    it "clones via #{protocol}" do
+      expect(sexp_find(subject, cmd)).to_not match_array([])
+    end
+  end
+
+  shared_examples 'does not clone' do
+    let(:payload) {payload_for(:push, :ruby, git: { clone: 'false'})}
+
     it 'clones via ssh' do
-      expect(sexp_find(subject, cmd)).to_not be_nil
+      expect(sexp_find(subject, cmd)).to be_nil
     end
   end
 
@@ -92,6 +100,30 @@ describe Travis::Build::Git, :sexp do
     include_examples 'installs an ssh key'
     include_examples 'writes a netrc', :oauth
     include_examples 'clones via', :https
+  end
+
+  describe 'config.keep_netrc' do
+    context "with default configuration" do
+      it 'does not delete .netrc' do
+        should_not include_sexp [:raw, "rm -f ${TRAVIS_HOME}/.netrc"]
+      end
+    end
+
+    context "when keep_netrc is true" do
+      before { payload[:keep_netrc] = true }
+
+      it 'does not delete .netrc' do
+        should_not include_sexp [:raw, "rm -f ${TRAVIS_HOME}/.netrc"]
+      end
+    end
+
+    context "when keep_netrc is false" do
+      before { payload[:keep_netrc] = false }
+
+      it 'deletes .netrc' do
+        should include_sexp [:raw, "rm -f ${TRAVIS_HOME}/.netrc", assert: true]
+      end
+    end
   end
 
   describe 'public repo' do

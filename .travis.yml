@@ -1,7 +1,9 @@
 language: ruby
-sudo: required
 dist: xenial
-rvm: 2.5.3
+rvm: 2.5.8
+
+services:
+  - redis
 
 cache:
   bundler: true
@@ -9,13 +11,19 @@ cache:
 env:
   global:
   - COVERAGE=1
+  - PATH=/snap/bin:$PATH
   matrix:
   - INTEGRATION_SPECS=0
   - INTEGRATION_SPECS=1
 
+addons:
+  snaps:
+  - name: docker
+    channel: latest/beta
+
 stages:
 - test
-- ':ship: it to Quay.io'
+- ':ship: it to quay.io'
 
 jobs:
   allow_failures:
@@ -24,21 +32,23 @@ jobs:
   - stage: test
     env:
     script: ./script/validate-example-payloads-with-docker
-  - stage: ':ship: it to Quay.io'
+  - stage: ':ship: it to quay.io'
     env:
     script: ./script/docker-build-and-push
-    if: NOT type IN (pull_request) AND branch = master
+    if: (branch = master and type = push ) OR commit_message =~ /ship:docker/ OR env(SHIP_DOCKER) = true
 
 before_script:
+- "gem install bundler -v 1.17.3"
 - eval "$(script/handle-docker-config)"
+- bundle install
 - bundle exec rake clean assets:precompile
 
 script:
-- bundle exec rake parallel:spec
+- bundle exec rspec spec
 - bundle exec rake shfmt
 - bundle exec rake assert_clean
 - bundle exec rake shellcheck
-- bundle exec rake assert_examples[parallel]
+- bundle exec rake assert_examples
 
 after_success: bundle exec codeclimate-test-reporter
 
@@ -62,3 +72,4 @@ deploy:
     branch: master
     condition: $INTEGRATION_SPECS == 1
     repo: travis-ci/travis-build
+  edge: true

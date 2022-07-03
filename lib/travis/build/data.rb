@@ -12,18 +12,20 @@ module Travis
       DEFAULTS = { }
 
       DEFAULT_CACHES = {
-        bundler:   false,
-        cocoapods: false,
-        composer:  false,
-        ccache:    false,
-        pip:       false
+        bundler:      false,
+        cocoapods:    false,
+        composer:     false,
+        ccache:       false,
+        pip:          false,
+        npm:          true
       }
 
-      attr_reader :data
+      attr_reader :data, :language_default_p
 
       def initialize(data, defaults = {})
         data = data.deep_symbolize_keys
         defaults = defaults.deep_symbolize_keys
+        @language_default_p = data[:language_default_p]
         @data = DEFAULTS.deep_merge(defaults.deep_merge(data))
       end
 
@@ -61,6 +63,10 @@ module Travis
 
       def cache_options
         data[:cache_settings] || data[:cache_options] || {}
+      end
+
+      def workspace
+        data[:workspace] || cache_options
       end
 
       def cache(input = config[:cache])
@@ -115,6 +121,10 @@ module Travis
         !!job[:secure_env_removed]
       end
 
+      def secrets
+        Array(data[:secrets])
+      end
+
       def disable_sudo?
         !!data[:paranoid]
       end
@@ -132,9 +142,17 @@ module Travis
       end
 
       def source_ssh?
-        repo_private? && !installation? or
-        repo_private? && custom_ssh_key? or
-        prefer_https?
+        return false if prefer_https?
+        ((repo_private? || force_private?) && !installation?) ||
+          (repo_private? && custom_ssh_key?)
+      end
+
+      def force_private?
+        github? && !source_host&.include?('github.com')
+      end
+
+      def github?
+        repository[:vcs_type] == 'GithubRepository'
       end
 
       def source_host
@@ -154,7 +172,7 @@ module Travis
       end
 
       def github_id
-        repository.fetch(:github_id)
+        repository[:vcs_id] || repository.fetch(:github_id)
       end
 
       def repo_private?
@@ -193,7 +211,12 @@ module Travis
         data[:repository] || {}
       end
 
+      def allowed_repositories
+        data[:allowed_repositories] || [github_id]
+      end
+
       def token
+        # CHANGE FOR DEPLOY
         installation? ? installation_token : data[:oauth_token]
       end
 
@@ -205,6 +228,10 @@ module Travis
         data[:prefer_https]
       end
 
+      def keep_netrc?
+        data.key?(:keep_netrc) ? data[:keep_netrc] : true
+      end
+
       def installation?
         !!installation_id
       end
@@ -214,7 +241,15 @@ module Travis
       end
 
       def installation_token
-        GithubApps.new(installation_id).access_token
+        GithubApps.new(installation_id, {}, allowed_repositories).access_token
+      rescue RuntimeError => e
+        if e.message =~ /Failed to obtain token from GitHub/
+          raise Travis::Build::GithubAppsTokenFetchError.new
+        end
+      end
+
+      def workspaces
+        config[:workspaces]
       end
     end
   end

@@ -29,8 +29,29 @@ travis_setup_env() {
   msys*)
     export TRAVIS_OS_NAME=windows
     ;;
+  freebsd*)
+    export TRAVIS_OS_NAME=freebsd
+    ;;
   *)
     export TRAVIS_OS_NAME=notset
+    ;;
+  esac
+
+  case $(uname -m) in
+  x86_64*)
+    export TRAVIS_CPU_ARCH=amd64
+    ;;
+  aarch64*)
+    export TRAVIS_CPU_ARCH=arm64
+    ;;
+  ppc64le*)
+    export TRAVIS_CPU_ARCH=ppc64le
+    ;;
+  s390x*)
+    export TRAVIS_CPU_ARCH=s390x
+    ;;
+  *)
+    export TRAVIS_CPU_ARCH=notset
     ;;
   esac
 
@@ -55,7 +76,7 @@ travis_setup_env() {
   export TRAVIS_TEST_RESULT=
   export TRAVIS_CMD=
 
-  TRAVIS_TMPDIR="$(mktemp -d 2>/dev/null || mktemp -d -t 'travis_tmp')"
+  TRAVIS_TMPDIR="$(mktemp -d 2>/dev/null || mktemp -d -t travis_tmp.XXXX)"
   mkdir -p "${TRAVIS_TMPDIR}"
   export TRAVIS_TMPDIR
 

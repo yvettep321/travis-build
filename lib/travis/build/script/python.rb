@@ -3,9 +3,25 @@ module Travis
     class Script
       class Python < Script
         DEFAULTS = {
-          python: '2.7',
+          python: '3.6',
           virtualenv: { system_site_packages: false }
         }
+
+        DEPRECATIONS = [
+          {
+            name: 'Python',
+            current_default: DEFAULTS[:python],
+            new_default: '3.6',
+            cutoff_date: '2019-04-16',
+          }
+        ]
+
+        PIP_20_3_MSG = [
+          "Pip version 20.3 introduces changes to the dependency resolver that may affect your software.",
+          "We advise you to consider testing the upcoming changes, which may be introduced in a future Travis CI build image update.",
+          "See https://pip.pypa.io/en/latest/user_guide/#changes-to-the-pip-dependency-resolver-in-20-2-2020 for more information."
+        ]
+        PIP_20_2_MSG = "With pip 20.2, you can test the new dependency resolver with the \\\`--use-feature=2020-resolver\\\` flag."
 
         REQUIREMENTS_MISSING = 'Could not locate requirements.txt. Override the install: key in your .travis.yml to install dependencies.'
         SCRIPT_MISSING       = 'Please override the script: key in your .travis.yml to run tests.'
@@ -35,6 +51,7 @@ module Travis
           sh.cmd 'python --version'
           sh.cmd 'pip --version'
           sh.export 'PIP_DISABLE_PIP_VERSION_CHECK', '1', echo: false
+          sh.export 'PIP_PROGRESS_BAR', 'off', echo: false
         end
 
         def setup_cache
@@ -47,6 +64,7 @@ module Travis
         end
 
         def install
+          warn_pip_20_3
           sh.if '-f Requirements.txt' do
             sh.cmd 'pip install -r Requirements.txt', fold: 'install', retry: true
           end
@@ -61,7 +79,7 @@ module Travis
         def script
           # This always fails the build, asking the user to provide a custom :script.
           # The Python ecosystem has no good default build command most of the
-          # community aggrees on. Per discussion with jezjez, josh-k and others. MK
+          # community agrees on. Per discussion with jezjez, josh-k and others. MK
           sh.failure SCRIPT_MISSING
         end
 
@@ -109,19 +127,46 @@ module Travis
             sh.echo "Downloading archive: ${archive_url}", ansi: :yellow
             archive_basename = [lang, vers].compact.join("-")
             archive_filename = "#{archive_basename}.tar.bz2"
-            sh.cmd "curl -sSf -o #{archive_filename} ${archive_url}", echo: true, assert: false
+            sh.cmd "curl -sSf --retry 5 -o #{archive_filename} ${archive_url}", echo: true, assert: false, timing: true
             sh.if "$? != 0" do
               sh.failure "Unable to download #{version} archive. The archive may not exist. Please consider a different version."
             end
-            sh.cmd "sudo tar xjf #{archive_filename} --directory /", echo: true, assert: true
+            sh.cmd "sudo #{tar_extract} #{archive_filename} --directory /", echo: true, assert: true, timing: true
             sh.cmd "rm #{archive_filename}", echo: false
+          end
+
+          def tar_extract
+            case config[:os]
+            when 'freebsd'
+              "tar xPjf"
+            else
+              "tar xjf"
+            end
           end
 
           def setup_path(version = 'nightly')
             sh.cmd "echo 'export PATH=/opt/python/#{version}/bin:$PATH' | sudo tee -a #{PYENV_PATH_FILE} &>/dev/null"
           end
+
+          def pip_version_at_least_20_2?
+            "$(travis_vers2int $(pip --version | cut -f2 -d \" \")) -ge $(travis_vers2int \"20.2\")"
+          end
+          def pip_version_before_20_3?
+            "$(travis_vers2int $(pip --version | cut -f2 -d \" \")) -lt $(travis_vers2int \"20.3\")"
+          end
+
+          def warn_pip_20_3
+            sh.if pip_version_before_20_3? do
+              PIP_20_3_MSG.each { |l| sh.echo l, ansi: :yellow }
+
+              sh.if pip_version_at_least_20_2? do
+                sh.echo PIP_20_2_MSG, ansi: :yellow
+              end
+
+              sh.echo
+            end
+          end
       end
     end
   end
 end
-

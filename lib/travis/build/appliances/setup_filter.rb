@@ -1,5 +1,4 @@
 require 'travis/build/appliances/base'
-require 'travis/build/git'
 require 'travis/rollout'
 
 module Travis
@@ -12,7 +11,7 @@ module Travis
           end
 
           def repo_id
-            data.repository[:github_id]
+            data.repository[:vcs_id] || data.repository[:github_id]
           end
 
           def repo_slug
@@ -63,7 +62,8 @@ module Travis
         }
 
         def apply?
-          enabled? and secrets.any?
+          sh.echo 'Secret environment variables are not obfuscated on Windows, please refer to our documentation: https://docs.travis-ci.com/user/best-practices-security', ansi: 'yellow' if windows?
+          enabled? and secrets.any? and !windows?
         end
 
         def apply
@@ -105,7 +105,11 @@ module Travis
           end
 
           def secrets
-            @secrets ||= env.groups.flat_map(&:vars).select(&:secure?).map(&:value)
+            @secrets ||= env_secrets.concat(data.secrets).uniq
+          end
+
+          def env_secrets
+            env.groups.flat_map(&:vars).select(&:secure?).map(&:value)
           end
 
           def env

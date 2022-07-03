@@ -45,6 +45,9 @@ module Travis
           sh.if '"$TRAVIS_DIST" == precise' do
             sh.cmd 'sudo service mongodb start', echo: true, timing: true
           end
+          sh.elif '"$TRAVIS_DIST" == focal' do
+            sh.cmd 'sudo systemctl start mongodb', echo: true, timing: true
+          end
           sh.elif '"$TRAVIS_INIT" == upstart' do
             sh.cmd 'sudo service mongod start', echo: true, timing: true
           end
@@ -86,7 +89,7 @@ module Travis
           sh.elif '"$TRAVIS_INIT" == systemd' do
             sh.cmd 'sudo systemctl start xvfb', echo: true, timing: true
           end
-          sh.export 'DISPLAY', '99:0', echo: true
+          sh.export 'DISPLAY', ':99.0', echo: true
         end
 
         private

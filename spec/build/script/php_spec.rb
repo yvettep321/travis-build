@@ -16,11 +16,11 @@ describe Travis::Build::Script::Php, :sexp do
   it_behaves_like 'a build script sexp'
 
   it 'sets TRAVIS_PHP_VERSION' do
-    should include_sexp [:export, ['TRAVIS_PHP_VERSION', '5.5']]
+    should include_sexp [:export, ['TRAVIS_PHP_VERSION', '7.2']]
   end
 
   it 'sets up the php version' do
-    should include_sexp [:cmd, 'phpenv global 5.5 2>/dev/null', echo: true, timing: true]
+    should include_sexp [:cmd, 'phpenv global 7.2 2>/dev/null', echo: true, timing: true]
     should include_sexp [:cmd, 'phpenv rehash']
   end
 
@@ -36,10 +36,38 @@ describe Travis::Build::Script::Php, :sexp do
     should include_sexp [:cmd, 'phpunit', echo: true, timing: true]
   end
 
+  context "with minimal config" do
+    before do
+      data[:config][:language] = 'php'; data[:config].delete(:php)
+      described_class.send :remove_const, :DEPRECATIONS
+      described_class.const_set("DEPRECATIONS", [
+        {
+          name: 'PHP',
+          current_default: '5.5',
+          new_default: '7.3',
+          cutoff_date: '2018-03-15',
+        }
+      ])
+    end
+
+    context "before default change cutoff date" do
+      before do
+        DateTime.stubs(:now).returns(DateTime.parse("2018-01-01"))
+      end
+      it { should include_sexp [:echo, /Using the default PHP version/, ansi: :yellow] }
+    end
+
+    context "after default change cutoff date" do
+      before do
+        DateTime.stubs(:now).returns(DateTime.parse("2019-01-01"))
+      end
+      it { should_not include_sexp [:echo, /Using the default PHP version/, ansi: :yellow] }
+    end
+  end
+
   describe 'installs php nightly' do
     before { data[:config][:php] = 'nightly' }
-    # expect(sexp).to include_sexp [:raw, "archive_url=https://s3.amazonaws.com/travis-php-archives/php-#{version}-archive.tar.bz2"]
-    xit { should include_sexp [:cmd, 'curl -s -o archive.tar.bz2 $archive_url && tar xjf archive.tar.bz2 --directory /', timing: true] }
+    it { should include_sexp [:cmd, 'curl -sSf --retry 5 -o archive.tar.bz2 $archive_url && tar xjf archive.tar.bz2 --directory /', echo: true, timing: true] }
   end
 
   context 'with php nightly' do
@@ -100,14 +128,14 @@ describe Travis::Build::Script::Php, :sexp do
     it { should include_sexp [:raw, "grep session.save_path #{path} | cut -d= -f2 | sudo xargs mkdir -m 01733 -p"] }
   end
 
-  describe 'installs hhvm-nightly' do
+   describe 'installs hhvm-nightly' do
     before { data[:config][:php] = 'hhvm-nightly' }
     it { should include_sexp [:cmd, 'travis_apt_get_update'] }
     it { should include_sexp [:cmd, 'sudo apt-get install hhvm-nightly -y 2>&1 >/dev/null'] }
     it { store_example(name: 'hhvm-nightly') }
   end
 
-  describe 'installs specific hhvm version' do
+   describe 'installs specific hhvm version' do
     before { data[:config][:php] = 'hhvm-3.12' }
     it { should include_sexp [:cmd, 'travis_apt_get_update'] }
     it { should include_sexp [:cmd, 'sudo apt-get install -y hhvm', timing: true, assert: true, echo: true] }
@@ -117,11 +145,11 @@ describe Travis::Build::Script::Php, :sexp do
   describe 'when desired PHP version is not found' do
     let(:version) { '7.0.0beta2' }
     let(:data) { payload_for(:push, :php, config: { php: version }) }
-    let(:sexp) { sexp_find(sexp_filter(subject, [:if, "$? -ne 0"])[1], [:then]) }
+    let(:sexp) { sexp_find(sexp_filter(subject, [:if, "$? -ne 0"])[0], [:then]) }
 
     it 'installs PHP version on demand' do
       expect(sexp).to include_sexp [:raw, "archive_url=https://s3.amazonaws.com/travis-php-archives/binaries/${travis_host_os}/${travis_rel_version}/$(uname -m)/php-#{version}.tar.bz2", assert: true]
-      expect(sexp).to include_sexp [:cmd, "curl -s -o archive.tar.bz2 $archive_url && tar xjf archive.tar.bz2 --directory /", echo: true, timing: true]
+      expect(sexp).to include_sexp [:cmd, "curl -sSf --retry 5 -o archive.tar.bz2 $archive_url && tar xjf archive.tar.bz2 --directory /", echo: true, timing: true]
     end
   end
 

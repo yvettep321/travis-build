@@ -14,6 +14,7 @@ gem 'activesupport', '~> 4.0'
 gem 'addressable', '~> 2.3'
 gem 'codeclimate-test-reporter', require: false, group: %i[development test]
 gem 'coder'
+gem 'connection_pool'
 gem 'faraday'
 gem 'faraday_middleware'
 gem 'jemalloc', git: gh('joshk/jemalloc-rb')
@@ -25,7 +26,9 @@ gem 'mocha', require: false, group: %i[development test]
 gem 'parallel_tests', require: false, group: %i[development test]
 gem 'pry', require: false, group: %i[development test]
 gem 'puma'
+gem 'rack', '>= 2.1.4'
 gem 'rack-ssl', '~> 1.4'
+gem 'rack-test'
 gem 'rake'
 gem 'rbtrace'
 gem 'rerun', require: false, group: :development
@@ -33,10 +36,12 @@ gem 'rspec', '~> 3.0', group: %i[development test]
 gem 'rubocop', require: false, group: %i[development test]
 gem 'sentry-raven'
 gem 'simplecov', require: false, group: %i[development test]
-gem 'sinatra', '~> 1.4'
+gem 'sinatra'
 gem 'sinatra-contrib'
 gem 'travis'
 gem 'travis-config'
 gem 'travis-github_apps', git: gh('travis-ci/travis-github_apps')
 gem 'travis-rollout', git: gh('travis-ci/travis-rollout')
 gem 'travis-support', git: gh('travis-ci/travis-support')
+
+gem "octokit", "~> 4.18"

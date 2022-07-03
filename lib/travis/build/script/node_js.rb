@@ -9,6 +9,8 @@ module Travis
         YARN_REQUIRED_NODE_VERSION = '4'
 
         NPM_CI_CMD_VERSION = '5.8.0'
+        # See https://github.com/yarnpkg/yarn/releases/tag/v0.19.0.
+        YARN_FROZEN_LOCKFILE_OPTION_VERSION = '0.19.0'
 
         def export
           super
@@ -32,7 +34,7 @@ module Travis
           npm_disable_spinner
           npm_disable_progress
           npm_disable_strict_ssl unless npm_strict_ssl?
-          install_yarn
+          install_yarn_when_locked
         end
 
         def announce
@@ -61,7 +63,12 @@ module Travis
                 npm_install config[:npm_args]
               end
               sh.else do
-                sh.cmd "yarn", retry: true, fold: 'install'
+                sh.if yarn_supports_frozen_lockfile? do
+                  sh.cmd "yarn --frozen-lockfile", retry: true, fold: 'install'
+                end
+                sh.else do
+                  sh.cmd "yarn", retry: true, fold: 'install'
+                end
               end
             end
             sh.else do
@@ -95,9 +102,10 @@ module Travis
 
         def setup_cache
           if data.cache?(:yarn)
+            install_yarn
             sh.fold 'cache.yarn' do
               sh.newline
-              directory_cache.add '${TRAVIS_HOME}/.cache/yarn'
+              directory_cache.add '$(dirname $(yarn cache dir))'
             end
           end
           if data.cache?(:npm)
@@ -197,24 +205,28 @@ module Travis
             sh.newline
           end
 
-          def install_yarn
+          def install_yarn_when_locked
             sh.if "-f yarn.lock" do
               sh.if yarn_req_not_met do
                 sh.echo "Node.js version $(node --version) does not meet requirement for yarn." \
                   " Please use Node.js #{YARN_REQUIRED_NODE_VERSION} or later.", ansi: :red
               end
               sh.else do
-                sh.fold "install.yarn" do
-                  sh.if "-z \"$(command -v yarn)\"" do
-                    sh.if "-z \"$(command -v gpg)\"" do
-                      sh.export "YARN_GPG", "no"
-                    end
-                    sh.echo   "Installing yarn", ansi: :green
-                    sh.cmd    "curl -o- -L https://yarnpkg.com/install.sh | bash", echo: true, timing: true
-                    sh.echo   "Setting up \\$PATH", ansi: :green
-                    sh.export "PATH", "${TRAVIS_HOME}/.yarn/bin:$PATH"
-                  end
+                install_yarn
+              end
+            end
+          end
+
+          def install_yarn
+            sh.if "-z \"$(command -v yarn)\"" do
+              sh.fold "install.yarn" do
+                sh.if "-z \"$(command -v gpg)\"" do
+                  sh.export "YARN_GPG", "no"
                 end
+                sh.echo   "Installing yarn", ansi: :green
+                sh.cmd    "curl -o- -L https://yarnpkg.com/install.sh | bash", echo: true, timing: true
+                sh.echo   "Setting up \\$PATH", ansi: :green
+                sh.export "PATH", "${TRAVIS_HOME}/.yarn/bin:$PATH"
               end
             end
           end
@@ -247,6 +259,10 @@ module Travis
 
           def packages_locked?
             "$(travis_vers2int `npm -v`) -ge $(travis_vers2int #{NPM_CI_CMD_VERSION}) && (-f npm-shrinkwrap.json || -f package-lock.json)"
+          end
+
+          def yarn_supports_frozen_lockfile?
+            "$(travis_vers2int `yarn -v`) -ge $(travis_vers2int #{YARN_FROZEN_LOCKFILE_OPTION_VERSION})"
           end
       end
     end

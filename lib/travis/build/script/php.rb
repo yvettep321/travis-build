@@ -3,9 +3,18 @@ module Travis
     class Script
       class Php < Script
         DEFAULTS = {
-          php:      '5.5',
+          php:      '7.2',
           composer: '--no-interaction --prefer-source'
         }
+
+        DEPRECATIONS = [
+          {
+            name: 'PHP',
+            current_default: DEFAULTS[:php],
+            new_default: '7.2',
+            cutoff_date: '2019-03-12',
+          }
+        ]
 
         def configure
           super
@@ -186,7 +195,7 @@ hhvm.libxml.ext_entity_whitelist=file,http,https
           end
           sh.raw archive_url_for('travis-php-archives', version)
           sh.echo "Downloading archive: ${archive_url}", ansi: :yellow
-          sh.cmd "curl -s -o archive.tar.bz2 $archive_url && tar xjf archive.tar.bz2 --directory /", echo: true, assert: false
+          sh.cmd "curl -sSf --retry 5 -o archive.tar.bz2 $archive_url && tar xjf archive.tar.bz2 --directory /", echo: true, assert: false
           sh.cmd "rm -f archive.tar.bz2", echo: false
         end
 
@@ -212,23 +221,23 @@ hhvm.libxml.ext_entity_whitelist=file,http,https
         def overwrite_pearrc(version)
           pear_config = %q(
             [
-              'preferred_state' => "stable",
-              'temp_dir'     => "/tmp/pear/install",
-              'download_dir' => "/tmp/pear/install",
-              'bin_dir'      => "/home/travis/.phpenv/versions/__VERSION__/bin",
-              'php_dir'      => "/home/travis/.phpenv/versions/__VERSION__/share/pear",
-              'doc_dir'      => "/home/travis/.phpenv/versions/__VERSION__/docs",
-              'data_dir'     => "/home/travis/.phpenv/versions/__VERSION__/data",
-              'cfg_dir'      => "/home/travis/.phpenv/versions/__VERSION__/cfg",
-              'www_dir'      => "/home/travis/.phpenv/versions/__VERSION__/www",
-              'man_dir'      => "/home/travis/.phpenv/versions/__VERSION__/man",
-              'test_dir'     => "/home/travis/.phpenv/versions/__VERSION__/tests",
-              '__channels'   => [
-                '__uri' => [],
-                'doc.php.net' => [],
-                'pecl.php.net' => []
+              "preferred_state" => "stable",
+              "temp_dir"     => "/tmp/pear/install",
+              "download_dir" => "/tmp/pear/install",
+              "bin_dir"      => "/home/travis/.phpenv/versions/__VERSION__/bin",
+              "php_dir"      => "/home/travis/.phpenv/versions/__VERSION__/share/pear",
+              "doc_dir"      => "/home/travis/.phpenv/versions/__VERSION__/docs",
+              "data_dir"     => "/home/travis/.phpenv/versions/__VERSION__/data",
+              "cfg_dir"      => "/home/travis/.phpenv/versions/__VERSION__/cfg",
+              "www_dir"      => "/home/travis/.phpenv/versions/__VERSION__/www",
+              "man_dir"      => "/home/travis/.phpenv/versions/__VERSION__/man",
+              "test_dir"     => "/home/travis/.phpenv/versions/__VERSION__/tests",
+              "__channels"   => [
+                "__uri" => [],
+                "doc.php.net" => [],
+                "pecl.php.net" => []
               ],
-              'auto_discover' => 1
+              "auto_discover" => 1
             ]
           ).gsub("__VERSION__", version)
 

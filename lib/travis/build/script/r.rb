@@ -32,12 +32,14 @@ module Travis
           bioc_check: false,
           bioc_use_devel: false,
           disable_homebrew: false,
+          use_devtools: false,
           r: 'release'
         }
 
         def initialize(data)
           # TODO: Is there a way to avoid explicitly naming arguments here?
           super
+          @remotes_installed = false
           @devtools_installed = false
           @bioc_installed = false
         end
@@ -57,7 +59,7 @@ module Travis
 
           sh.echo 'R for Travis-CI is not officially supported, '\
                   'but is community maintained.', ansi: :green
-          sh.echo 'Please file any issues at https://github.com/travis-ci/travis-ci/issues'
+          sh.echo 'Please file any issues at https://travis-ci.community/c/languages/r'
           sh.echo 'and mention @jeroen and @jimhester in the issue'
 
           sh.fold 'R-install' do
@@ -65,6 +67,13 @@ module Travis
               sh.echo 'Installing R', ansi: :yellow
               case config[:os]
               when 'linux'
+                if config[:arch] == 'arm64'
+                  sh.failure 'ARM architecture not supported'
+                end
+                if config[:dist] == 'trusty'
+                  sh.failure '"dist: trusty" is no longer supported for "language: r"'
+                end
+
                 # This key is added implicitly by the marutter PPA below
                 #sh.cmd 'apt-key adv --keyserver ha.pool.sks-keyservers.net '\
                   #'--recv-keys E298A3A825C0D65DFD57CBB651716619E084DAB9', sudo: true
@@ -73,15 +82,17 @@ module Travis
                 if r_version_less_than('3.5.0')
                   sh.cmd 'sudo add-apt-repository -y "ppa:marutter/rrutter"'
                   sh.cmd 'sudo add-apt-repository -y "ppa:marutter/c2d4u"'
-                else
+                elsif r_version_less_than('4.0.0')
                   sh.cmd 'sudo add-apt-repository -y "ppa:marutter/rrutter3.5"'
                   sh.cmd 'sudo add-apt-repository -y "ppa:marutter/c2d4u3.5"'
-                  sh.cmd 'sudo add-apt-repository -y "ppa:ubuntugis/ppa"'
-                  sh.cmd 'sudo add-apt-repository -y "ppa:opencpu/jq"'
+                else
+                  sh.cmd 'sudo add-apt-repository -y "ppa:marutter/rrutter4.0"'
+                  sh.cmd 'sudo add-apt-repository -y "ppa:c2d4u.team/c2d4u4.0+"'
                 end
 
-                # Both c2d4u and c2d4u3.5 depend on this ppa for ffmpeg
-                sh.cmd 'sudo add-apt-repository -y "ppa:kirillshkrogalev/ffmpeg-next"'
+                # Extra PPAs that do not depend on R version
+                sh.cmd 'sudo add-apt-repository -y "ppa:ubuntugis/ppa"'
+                sh.cmd 'sudo add-apt-repository -y "ppa:cran/travis"'
 
                 # Update after adding all repositories. Retry several
                 # times to work around flaky connection to Launchpad PPAs.
@@ -100,15 +111,16 @@ module Travis
                   'build-essential gcc g++ libblas-dev liblapack-dev '\
                   'libncurses5-dev libreadline-dev libjpeg-dev '\
                   'libpcre3-dev libpng-dev zlib1g-dev libbz2-dev liblzma-dev libicu-dev '\
-                  'cdbs qpdf texinfo libssh2-1-dev '\
+                  'cdbs qpdf texinfo libssh2-1-dev devscripts '\
                   "#{optional_apt_pkgs}", retry: true
 
-                r_filename = "R-#{r_version}-$(lsb_release -cs).xz"
-                r_url = "https://travis-ci.rstudio.org/#{r_filename}"
+                r_filename = "r-#{r_version}_1_amd64.deb"
+                os_version = "$(lsb_release -rs | tr -d '.')"
+                r_url = "https://cdn.rstudio.com/r/ubuntu-#{os_version}/pkgs/#{r_filename}"
                 sh.cmd "curl -fLo /tmp/#{r_filename} #{r_url}", retry: true
-                sh.cmd "tar xJf /tmp/#{r_filename} -C ~"
-                sh.export 'PATH', "${TRAVIS_HOME}/R-bin/bin:$PATH", echo: false
-                sh.export 'LD_LIBRARY_PATH', "${TRAVIS_HOME}/R-bin/lib:$LD_LIBRARY_PATH", echo: false
+                sh.cmd "sudo apt-get install -y gdebi-core"
+                sh.cmd "sudo gdebi --non-interactive /tmp/#{r_filename}"
+                sh.export 'PATH', "/opt/R/#{r_version}/bin:$PATH", echo: false
                 sh.rm "/tmp/#{r_filename}"
 
                 sh.cmd "sudo mkdir -p /usr/local/lib/R/site-library $R_LIBS_USER"
@@ -116,11 +128,14 @@ module Travis
               when 'osx'
                 # We want to update, but we don't need the 800+ lines of
                 # output.
-                sh.cmd 'brew update >/dev/null', retry: true
+                unless config[:disable_homebrew]
+                  sh.cmd 'brew update >/dev/null', retry: true
+                  sh.cmd 'brew install checkbashisms || true'
+                end
 
-                # R-devel builds available at research.att.com
+                # R-devel builds available at mac.r-project.org
                 if r_version == 'devel'
-                  r_url = "https://r.research.att.com/el-capitan/R-devel/R-devel-el-capitan-signed.pkg"
+                  r_url = "https://mac.r-project.org/high-sierra/R-devel/R-devel.pkg"
 
                 # The latest release is the only one available in /bin/macosx
                 elsif r_version == r_latest
@@ -162,10 +177,10 @@ module Travis
               if config[:latex]
                 setup_latex
               else
-                config[:r_check_args] << " --no-manual"
+                config[:r_check_args] = config[:r_check_args] + " --no-manual"
+                config[:r_build_args] = config[:r_build_args] + " --no-manual"
               end
 
-              setup_bioc if needs_bioc?
               setup_pandoc if config[:pandoc]
 
               # Removes preinstalled homebrew
@@ -188,6 +203,8 @@ module Travis
           sh.if '! -e DESCRIPTION' do
             sh.failure "No DESCRIPTION file found, user must supply their own install and script steps"
           end
+
+          setup_bioc if needs_bioc?
 
           sh.fold "R-dependencies" do
             sh.echo 'Installing package dependencies', ansi: :yellow
@@ -321,10 +338,13 @@ module Travis
         def r_github_install(packages)
           return if packages.empty?
           packages = Array(packages)
-          setup_devtools
+
+          setup_remotes
+          setup_devtools if config[:use_devtools]
+
           sh.echo "Installing R packages from GitHub: #{packages.join(', ')}"
           pkg_arg = packages_as_arg(packages)
-          install_script = "devtools::install_github(#{pkg_arg}, build_vignettes = FALSE)"
+          install_script = "remotes::install_github(#{pkg_arg})"
           sh.cmd "Rscript -e '#{install_script}'"
         end
 
@@ -332,8 +352,8 @@ module Travis
           return if packages.empty?
           packages = Array(packages)
           if config[:os] == 'linux'
-            if !config[:sudo] or config[:dist] == 'precise'
-              sh.echo "R binary packages not supported with 'sudo: false' or 'dist: precise', "\
+            if config[:dist] == 'precise'
+              sh.echo "R binary packages not supported for 'dist: precise', "\
                 ' falling back to source install'
               return r_install packages
             end
@@ -365,10 +385,12 @@ module Travis
         end
 
         def install_deps
-          setup_devtools
+          setup_remotes
+          setup_devtools if config[:use_devtools]
+
           install_script =
-            'deps <- devtools::dev_package_deps(dependencies = NA);'\
-            'devtools::install_deps(dependencies = TRUE);'\
+            'deps <- remotes::dev_package_deps(dependencies = NA);'\
+            'remotes::install_deps(dependencies = TRUE);'\
             'if (!all(deps$package %in% installed.packages())) {'\
             ' message("missing: ", paste(setdiff(deps$package, installed.packages()), collapse=", "));'\
             ' q(status = 1, save = "no")'\
@@ -418,7 +440,7 @@ module Travis
                   'if (!requireNamespace("BiocManager", quietly=TRUE))'\
                   '  install.packages("BiocManager");'\
                   "if (#{as_r_boolean(config[:bioc_use_devel])})"\
-                  ' BiocManager::install(version = "devel");'\
+                  ' BiocManager::install(version = "devel", ask = FALSE);'\
                   'cat(append = TRUE, file = "~/.Rprofile.site", "options(repos = BiocManager::repositories());")'
                 end
                 sh.cmd "Rscript -e '#{bioc_install_script}'", retry: true
@@ -434,6 +456,23 @@ module Travis
             end
           end
           @bioc_installed = true
+        end
+
+        def setup_remotes
+          unless @remotes_installed
+            case config[:os]
+            when 'linux'
+              # We can't use remotes binaries because R versions < 3.5 are not
+              # compatible with R versions >= 3.5
+                r_install ['remotes']
+            else
+              remotes_check = '!requireNamespace("remotes", quietly = TRUE)'
+              remotes_install = 'install.packages("remotes")'
+              sh.cmd "Rscript -e 'if (#{remotes_check}) #{remotes_install}'",
+                     retry: true
+            end
+          end
+          @remotes_installed = true
         end
 
         def setup_devtools
@@ -458,7 +497,7 @@ module Travis
           when 'linux'
             texlive_filename = 'texlive.tar.gz'
             texlive_url = 'https://github.com/jimhester/ubuntu-bin/releases/download/latest/texlive.tar.gz'
-            sh.cmd "curl -fLo /tmp/#{texlive_filename} #{texlive_url}"
+            sh.cmd "curl -fLo /tmp/#{texlive_filename} #{texlive_url}", retry: true
             sh.cmd "tar xzf /tmp/#{texlive_filename} -C ~"
             sh.export 'PATH', "${TRAVIS_HOME}/texlive/bin/x86_64-linux:$PATH"
             sh.cmd 'tlmgr update --self', assert: false
@@ -527,22 +566,30 @@ module Travis
             sh.cmd 'curl -fLo /tmp/gfortran.tar.bz2 http://r.research.att.com/libs/gfortran-4.8.2-darwin13.tar.bz2', retry: true
             sh.cmd 'sudo tar fvxz /tmp/gfortran.tar.bz2 -C /'
             sh.rm '/tmp/gfortran.tar.bz2'
-          else
+          elsif r_version_less_than('3.7')
             sh.cmd "curl -fLo /tmp/gfortran61.dmg #{repos[:CRAN]}/contrib/extra/macOS/gfortran-6.1-ElCapitan.dmg", retry: true
             sh.cmd 'sudo hdiutil attach /tmp/gfortran61.dmg -mountpoint /Volumes/gfortran'
             sh.cmd 'sudo installer -pkg "/Volumes/gfortran/gfortran-6.1-ElCapitan/gfortran.pkg" -target /'
             sh.cmd 'sudo hdiutil detach /Volumes/gfortran'
             sh.rm '/tmp/gfortran61.dmg'
+          else
+            sh.cmd "curl -fLo /tmp/gfortran82.dmg https://github.com/fxcoudert/gfortran-for-macOS/releases/download/8.2/gfortran-8.2-Mojave.dmg", retry: true
+            sh.cmd 'sudo hdiutil attach /tmp/gfortran82.dmg -mountpoint /Volumes/gfortran'
+            sh.cmd 'sudo installer -pkg "/Volumes/gfortran/gfortran-8.2-Mojave/gfortran.pkg" -target /'
+            sh.cmd 'sudo hdiutil detach /Volumes/gfortran'
+            sh.rm '/tmp/gfortran82.dmg'
           end
         end
 
         # Uninstalls the preinstalled homebrew
-        # See FAQ: https://docs.brew.sh/FAQ#how-do-i-uninstall-old-versions-of-a-formula
+        # See FAQ: https://docs.brew.sh/FAQ#how-do-i-uninstall-homebrew
         def disable_homebrew
           return unless (config[:os] == 'osx')
-          sh.cmd "curl -fsSOL https://raw.githubusercontent.com/Homebrew/install/master/uninstall"
-          sh.cmd "sudo ruby uninstall --force"
-          sh.cmd "rm uninstall"
+          sh.cmd "curl -fsSOL https://raw.githubusercontent.com/Homebrew/install/master/uninstall.sh"
+          sh.cmd "sudo /bin/bash uninstall.sh --force"
+          sh.cmd "rm uninstall.sh"
+          sh.cmd "hash -r"
+          sh.cmd "git config --global --unset protocol.version || true"
         end
 
         # Abstract out version check
@@ -561,23 +608,26 @@ module Travis
 
         def normalized_r_version(v=Array(config[:r]).first.to_s)
           case v
-          when 'release' then '3.5.1'
-          when 'oldrel' then '3.4.4'
+          when 'release' then '4.0.2'
+          when 'oldrel' then '3.6.3'
           when '3.0' then '3.0.3'
           when '3.1' then '3.1.3'
           when '3.2' then '3.2.5'
           when '3.3' then '3.3.3'
           when '3.4' then '3.4.4'
-          when '3.5' then '3.5.0'
+          when '3.5' then '3.5.3'
+          when '3.6' then '3.6.3'
+          when '4.0' then '4.0.2'
           when 'bioc-devel'
             config[:bioc_required] = true
             config[:bioc_use_devel] = true
-            normalized_r_version('devel')
+            config[:r] = 'release'
+            normalized_r_version('release')
           when 'bioc-release'
             config[:bioc_required] = true
             config[:bioc_use_devel] = false
             config[:r] = 'release'
-            normalized_r_version
+            normalized_r_version('release')
           else v
           end
         end
